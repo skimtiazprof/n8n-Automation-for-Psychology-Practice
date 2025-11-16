@@ -1,0 +1,235 @@
+{
+  "name": "n8n Automation for Psychology Practice",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "everyHour"
+            }
+          ]
+        }
+      },
+      "name": "Cron (every 15m)",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        -1152,
+        -352
+      ],
+      "id": "c67bdb8d-4527-4f63-902c-aa6b17406c95"
+    },
+    {
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "value": "skimtiaz.prof@gmail.com",
+          "mode": "list",
+          "cachedResultName": "skimtiaz.prof@gmail.com"
+        },
+        "start": "={{ new Date().toISOString() }}",
+        "end": "={{ new Date(new Date().getTime() + 1000*60*60*48).toISOString() }}",
+        "additionalFields": {}
+      },
+      "name": "Google Calendar: List events",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1,
+      "position": [
+        -928,
+        -352
+      ],
+      "id": "bc458e11-405c-4f76-a69c-965d9f483454",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "60UjSpOWjJneD6IZ",
+          "name": "Google Calendar account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {
+          "reset": false
+        }
+      },
+      "name": "SplitInBatches (per event)",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 1,
+      "position": [
+        -704,
+        -352
+      ],
+      "id": "a4e08b60-cf37-4dc5-a985-8e3f1bb0a7ae"
+    },
+    {
+      "parameters": {
+        "functionCode": "/**\n * n8n Function node: Filter & Extract\n * Purpose:\n * - Filter upcoming events occurring within the next 48 hours\n * - Extract patient info\n * - Format appointment datetime (Italian)\n * - Pass structured data for email + update\n */\n\n// Event record\nconst e = items[0].json;\nif (!e) return [];\n\n// --- Extract start datetime ---\nconst start = e.start?.dateTime || e.start?.date;\nif (!start) return [];\n\nconst startDate = new Date(start);\n\n// --- Compare to now (filter 48h upcoming events) ---\nconst now = new Date();\nconst diffHours = (startDate - now) / (1000 * 60 * 60);\n\n// Ignore past events or events >48h away\n// TEST MODE - allow all events\n// if (diffHours < 0 || diffHours > 48) return [];\n\n\n// --- Skip already-sent reminders ---\nconst desc = e.description || \"\";\nconst REMINDER_TAG = \"[REMINDER_SENT]\";\nif (desc.includes(REMINDER_TAG)) return [];\n\n// --- Patient name (event title) ---\nconst patientName = e.summary || \"Paziente\";\n\n// --- Extract patient email ---\nlet patientEmail = null;\n\n// From Google Calendar attendees\nif (Array.isArray(e.attendees)) {\n    for (const a of e.attendees) {\n        if (a.email && !a.organizer && !a.self) {\n            patientEmail = a.email;\n            break;\n        }\n    }\n    if (!patientEmail && e.attendees[0]?.email) {\n        patientEmail = e.attendees[0].email;\n    }\n}\n\n// From description (fallback)\nif (!patientEmail) {\n    const emailMatch = desc.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/i);\n    if (emailMatch) patientEmail = emailMatch[0];\n}\n\n// --- Extract phone number ---\nlet phone = null;\nconst phoneMatch = desc.match(/(\\+?\\d[\\d\\s().-]{6,}\\d)/);\nif (phoneMatch) phone = phoneMatch[0].trim();\n\n// --- Italian formatted date ---\nlet formattedDateItalian;\ntry {\n    const options = {\n        year: \"numeric\",\n        month: \"long\",\n        day: \"numeric\",\n        hour: \"numeric\",\n        minute: \"2-digit\"\n    };\n    formattedDateItalian = new Intl.DateTimeFormat(\"it-IT\", options)\n        .format(startDate)\n        .replace(\",\", \"\");\n} catch (err) {\n    formattedDateItalian = startDate.toLocaleString(\"it-IT\");\n}\n\n// --- Return clean structured output ---\nreturn [\n    {\n        json: {\n            eventId: e.id,\n            calendarId: e.organizer?.email || \"primary\",\n            summary: patientName,\n            startDateTime: startDate.toISOString(),\n            formattedDateItalian,\n            description: desc,\n            patientEmail: patientEmail,\n            phone: phone,\n            rawEvent: e\n        }\n    }\n];"
+      },
+      "name": "Filter & Extract (Function)",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        -480,
+        -352
+      ],
+      "id": "9887656a-d11b-4901-8770-9dca8264f4be"
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "subject": "=Promemoria Appuntamento: {{$json[\"formattedDateItalian\"]}}",
+        "includeHtml": true,
+        "htmlMessage": "=<!DOCTYPE html>\n<html lang=\"it\">\n<head>\n  <meta charset=\"UTF-8\">\n  <title>Promemoria Appuntamento</title>\n  <style>\n    body {\n      font-family: \"Helvetica Neue\", Helvetica, Arial, sans-serif;\n      background-color: #f4f6f8;\n      color: #333333;\n      margin: 0;\n      padding: 0;\n    }\n    .container {\n      max-width: 600px;\n      margin: 30px auto;\n      background-color: #ffffff;\n      border-radius: 10px;\n      box-shadow: 0 4px 12px rgba(0,0,0,0.1);\n      padding: 30px;\n    }\n    .header {\n      font-size: 24px;\n      font-weight: bold;\n      color: #004aad;\n      margin-bottom: 20px;\n      text-align: center;\n    }\n    .content {\n      font-size: 16px;\n      line-height: 1.6;\n    }\n    .highlight {\n      color: #004aad;\n      font-weight: bold;\n    }\n    .button {\n      display: inline-block;\n      padding: 12px 24px;\n      margin-top: 20px;\n      background-color: #004aad;\n      color: #ffffff !important;\n      text-decoration: none;\n      border-radius: 6px;\n      font-weight: bold;\n    }\n    .footer {\n      margin-top: 30px;\n      font-size: 14px;\n      color: #777777;\n      text-align: center;\n    }\n  </style>\n</head>\n<body>\n  <div class=\"container\">\n    <div class=\"header\">Promemoria Appuntamento</div>\n    <div class=\"content\">\n      <p>Ciao <span class=\"highlight\">{{$json[\"summary\"]}}</span>,</p>\n      \n      <p>Ti ricordiamo il tuo prossimo appuntamento:</p>\n      \n      <ul>\n        <li><span class=\"highlight\">Data e ora:</span> {{$json[\"formattedDateItalian\"]}}</li>\n        <li><span class=\"highlight\">Telefono registrato:</span> {{$json[\"phone\"] || \"(non fornito)\"}}</li>\n      </ul>\n      \n      <p>Se desideri cambiare o annullare l’appuntamento, puoi rispondere a questa email o contattare lo studio.</p>\n      \n      <p style=\"text-align:center;\">\n        <a href=\"mailto:{{$json[\"calendarId\"]}}\" class=\"button\">Contatta lo Studio</a>\n      </p>\n      \n      <p class=\"footer\">\n        Cordiali saluti,<br>\n        Dr. Hadassa de Castro\n      </p>\n    </div>\n  </div>\n</body>\n</html>\n",
+        "message": "=",
+        "toList": [
+          "={{ $json.rawEvent.creator.email }}"
+        ],
+        "additionalFields": {}
+      },
+      "name": "Gmail: Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 1,
+      "position": [
+        -256,
+        -208
+      ],
+      "id": "c183879f-def3-4b9c-bd6b-d53ab8af6332",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "NMDxFal1XCp990Mp",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "name": "Finish batch",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        -32,
+        -352
+      ],
+      "id": "99297588-33f2-46bb-8a54-2a3f9486df65"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "calendar": {
+          "__rl": true,
+          "value": "skimtiaz.prof@gmail.com",
+          "mode": "list",
+          "cachedResultName": "skimtiaz.prof@gmail.com"
+        },
+        "eventId": "={{ $json.eventId }}",
+        "updateFields": {}
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        -256,
+        -448
+      ],
+      "id": "25d39b1c-3262-4016-b516-9a51b353e389",
+      "name": "Update an event",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "60UjSpOWjJneD6IZ",
+          "name": "Google Calendar account 2"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Cron (every 15m)": {
+      "main": [
+        [
+          {
+            "node": "Google Calendar: List events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Calendar: List events": {
+      "main": [
+        [
+          {
+            "node": "SplitInBatches (per event)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SplitInBatches (per event)": {
+      "main": [
+        [
+          {
+            "node": "Filter & Extract (Function)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter & Extract (Function)": {
+      "main": [
+        [
+          {
+            "node": "Gmail: Send Email",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Finish batch",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Update an event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail: Send Email": {
+      "main": [
+        [
+          {
+            "node": "Finish batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update an event": {
+      "main": [
+        [
+          {
+            "node": "Finish batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "versionId": "52e23347-a32c-40db-9920-85fd7413628c",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "45894b37f1d766687eb41e905a1ede6c1600e57f0ac4faa90c2f341924bdcb9d"
+  },
+  "id": "kl8JGA45cmllp6ff",
+  "tags": []
+}
